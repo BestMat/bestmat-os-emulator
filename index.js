@@ -62,18 +62,17 @@ class Register {
     static inc(register) {
 	this.set(register, this.get(register) + 1);
     }
-
-    static xor(register1, register2) {
-	this.set(register1, this.get(register2) ^ this.get(register2));
-    }
 }
 
-function cpu_interrupt(code) {
+function bios_interrupt(code) {
     if (Register.get("if_flag") == 0) return;
     const high = Register.get("reg0_high");
     const low = Register.get("reg0_low");
     if (code == 0x10) {
 	if (high == 0x0E) {
+	    // TODO: Implement page_number and foreground_color
+	    const page_number = Register.get("reg1_high");
+	    const foreground_color = Register.get("reg1_low");
 	    if (low == 12) {
 		bios_content = bios_content + '\n';
 		bios.value = bios_content;
@@ -86,19 +85,47 @@ function cpu_interrupt(code) {
     }
 }
 
+function str(register, value) {
+    Register.set(register, value);
+}
+
+function push(value) {
+    str("sp", Register.get("sp") - 1); // stack grows downwards
+    memory[Register.get("sp")] = value;
+}
+
+function pop() {
+    str("sp", Register.get("sp") + 1);
+}
+
+function xor(operand1, operand2) {
+    str(operand1, Register.get(operand1) ^ Register.get(operand2));
+}
+
+function inc(register) {
+    str(register, Register.get(register) + 1);
+}
+
+function int(code) {
+    bios_interrupt(code);
+}
+
+function cli() {
+    Register.set("if_flag", 0);
+}
+
 // str reg0_high, 0x0E
 // str reg0_low, 85
 // int 0x10 
 // str reg0_low, 12
 // int 0x10 
-Register.set("reg0_high", 0x0E);
-Register.set("reg0_low", 85); // ASCII Code of 'U' is 85
-cpu_interrupt(0x10);
-Register.set("reg0_low", 12); // ASCII Code of '\n' is 12
-cpu_interrupt(0x10);
-
-// str sp, 0x7BFE
-Register.set("sp", 0x7BFE);
+// str sp, 0x7C00 
+str("reg0_high", 0x0E);
+str("reg0_low", 85); // ASCII Code of 'U' is 85
+int(0x10);
+str("reg0_low", 12); // ASCII Code of '\n' is 12
+int(0x10);
+str("sp", 0x7C00);
 
 // string: "Hello, World!\n\0"
 // str reg1, &string
@@ -107,20 +134,26 @@ for (let i = 0; i < string.length; ++i) {
     memory[adr + i] = string[i];
 }
 
-Register.set("reg1", adr);
+str("reg4", adr); // reg4 is temporarily source index (si) register
 adr += string.length;
 
-while (memory[Register.get("reg1")] != '\0') {
-    Register.set("reg0_low", memory[Register.get("reg1")].charCodeAt());
-    cpu_interrupt(0x10);
+while (memory[Register.get("reg4")] != '\0') {
+    Register.set("reg0_low", memory[Register.get("reg4")].charCodeAt());
+    int(0x10);
     // inc reg1
-    Register.inc("reg1");
+    inc("reg4");
 }
 
-// xor reg1, reg1
-Register.xor("reg1", "reg1");
+// push 1
+// push 2
+// pop
+push(1);
+push(2);
+pop();
 
+// xor reg4, reg4
 // cli
-Register.set("if_flag", 0);
+xor("reg4", "reg4");
+cli();
 
 console.log(memory);
