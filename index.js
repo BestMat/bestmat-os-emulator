@@ -58,10 +58,6 @@ class Register {
 
 	this.registers[register] = value;
     }
-
-    static inc(register) {
-	this.set(register, this.get(register) + 1);
-    }
 }
 
 function bios_interrupt(code) {
@@ -106,6 +102,10 @@ function inc(register) {
     str(register, Register.get(register) + 1);
 }
 
+function sti() {
+    Register.set("if_flag", 1);
+}
+
 function int(code) {
     bios_interrupt(code);
 }
@@ -138,7 +138,7 @@ str("reg4", adr); // reg4 is temporarily source index (si) register
 adr += string.length;
 
 while (memory[Register.get("reg4")] != '\0') {
-    Register.set("reg0_low", memory[Register.get("reg4")].charCodeAt());
+    str("reg0_low", memory[Register.get("reg4")].charCodeAt());
     int(0x10);
     // inc reg1
     inc("reg4");
@@ -156,4 +156,4 @@ pop();
 xor("reg4", "reg4");
 cli();
 
-console.log(memory);
+console.log("[DEBUG] Memory View:", memory);

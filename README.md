@@ -3,4 +3,5 @@
 
 ## TODO
 [] (index.js:73) Bootloader: implement page_number and foreground_color
+
 [] (index.js)    32-Bit Mode: [Global Descriptor Table](https://wiki.osdev.org/GDT_Tutorial)
