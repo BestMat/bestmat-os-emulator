@@ -21,8 +21,10 @@ bios_content = bios_content + "BestMat OS Emulator: BIOS\n";
 bios.value = bios_content;
 class Register {
     static registers = {reg0: 0, reg1: 0, reg2: 0, reg3: 0, reg4: 0,
-			sp: 0, bp: 0, si: 0, di: 0, if_flag: 1,
+			sp: 0, bp: 0, si: 0, di: 0, if_flag: 1, ip: 0,
 			seg_code: 0, seg_data: 0, seg_extra: 0, seg_stack: 0};
+
+    static ip = this.registers.ip;
 
     static get(register) {
 	let value = this.registers[register];
@@ -288,8 +290,6 @@ class Emulator {
 	}
     };
 
-    static labels = new Map();
-
     static write_disk(hex) {
 	disk[disk_ptr++] = hex;
     }
@@ -347,16 +347,6 @@ class Emulator {
 	    this.write_disk(hex);
 	}
     }
-
-    static label(name) {
-	this.labels.set(name, disk_ptr);
-    }
-
-    static store_string(str) {
-	for (let i = 0; i < str.length; ++i) {
-	    this.write_disk(str[i].charCodeAt());
-	}
-    }
 }
 
 class BIOS {
@@ -387,15 +377,16 @@ class BIOS {
     }
     
     static emulate_bootloader(code) {
-	for (let i = 0; i < code.length; ++i) {
-	    if (code[i] >= 0xB0 && code[i] <= 0xBF) { // str: store register, immediate value
-		const register = this.get_register(Emulator.register_immediate_map, code[i]);
-		const value_byte1 = code[++i];
-		const value_byte2 = code[++i];
+	while (Register.ip < code.length) {
+	    const inst = code[Register.ip];
+	    if (inst >= 0xB0 && inst <= 0xBF) { // str: store register, immediate value
+		const register = this.get_register(Emulator.register_immediate_map, code[Register.ip]);
+		const value_byte1 = code[++Register.ip];
+		const value_byte2 = code[++Register.ip];
 		const value = value_byte1 | (value_byte2 << 8);
 		Register.set(register, value);
-	    } else if (code[i] == 0x8A) { // str: store register, register (8-bit)
-		const next_byte = code[++i];
+	    } else if (inst == 0x8A) { // str: store register, register (8-bit)
+		const next_byte = code[++Register.ip];
 		let register = undefined;
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
 		    register = "reg0_low";
@@ -421,10 +412,9 @@ class BIOS {
 		}
 
 		const value = this.get_register(Emulator.register_register_map[register], next_byte);
-		console.log("str " + register + ", " + String(value));
 		Register.set(register, value);
-	    } else if (code[i] == 0x8B) { // str: store register, register (16-bit)
-		const next_byte = code[++i];
+	    } else if (inst == 0x8B) { // str: store register, register (16-bit)
+		const next_byte = code[++Register.ip];
 		let register = undefined;
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
 		    register = "reg0";
@@ -450,10 +440,9 @@ class BIOS {
 		}
 
 		const value = this.get_register(Emulator.register_register_map[register], next_byte);
-		console.log("str " + register + ", " + String(value));
 		Register.set(register, value);
-	    } else if (code[i] == 0x8C) { // str: store segment, register (16-bit)
-		const next_byte = code[++i];
+	    } else if (inst == 0x8C) { // str: store segment, register (16-bit)
+		const next_byte = code[++Register.ip];
 		let segment = undefined;
 
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
@@ -473,10 +462,12 @@ class BIOS {
 
 		const register = this.get_register(Emulator.segment_register_map[segment], next_byte);
 		Register.set(segment, register);
-	    } else if (code[i] == 0xCD) { // int: BIOS interrupts
-		const interrupt_code = code[++i];
+	    } else if (inst == 0xCD) { // int: BIOS interrupts
+		const interrupt_code = code[++Register.ip];
 		this.interrupt(interrupt_code);
 	    }
+
+	    Register.ip += 1;
 	}
     }
     
@@ -501,19 +492,13 @@ class BIOS {
     }
 }
 
-// section data
-Emulator.label("string");
-Emulator.store_string("Hello, World!\n\0");
-
 // section code
-Emulator.label("_start");
 Emulator.str("reg0", 1);
 Emulator.str("seg_data", "reg0");
 Emulator.str("seg_extra", "reg0");
 Emulator.str("reg0_high", 0x0E);
 Emulator.str("reg0_low", 'U'.charCodeAt());
 Emulator.int(0x10);
-Emulator.str("si", "string");
 
 Emulator.pad(0, 510 - (disk_ptr - org_adr));
 Emulator.hex(0x55);
