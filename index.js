@@ -70,7 +70,12 @@ class Register {
     }
 
     static is_register(register) {
-	return Object.keys(this.registers).includes(register);
+	return Object.keys(this.registers).includes(register) || Object.keys(this.registers).includes(register.split("_")[0]);
+    }
+
+    static is_8_bit_register(register) {
+	const reg_split = register.split("_");
+	return Object.keys(this.registers).includes(reg_split[0]) && (reg_split[1] === "high" || reg_split[1] === "low");
     }
     
     static is_segment(register) {
@@ -78,274 +83,426 @@ class Register {
     }
 }
 
-class Emulator {
-    static register_immediate_map = {reg0_low: 0xB0, reg2_low: 0xB1, reg3_low: 0xB2, reg1_low: 0xB3,
-				     reg0_high: 0xB4, reg2_high: 0xB5, reg3_high: 0xB6, reg1_high: 0xB7,
-				     reg0: 0xB8, reg2: 0xB9, reg3: 0xBA, reg1: 0xBB,
-				     sp: 0xBC, bp: 0xBD, si: 0xBE, di: 0xBF};
+function little_endian(bytes, number) {
+    const buffer = new ArrayBuffer(bytes);
+    const data_view = new DataView(buffer);
 
-    static register_register_map = {
-	reg0: {
-	    reg0: 0xC0, reg0_low: 0xC0,
-	    reg2: 0xC1, reg2_low: 0xC1,
-	    reg3: 0xC2, reg3_low: 0xC2,
-	    reg1: 0xC3, reg1_low: 0xC3,
-	    sp: 0xC4,   reg0_high: 0xC4,
-	    bp: 0xC5,   reg2_high: 0xC5,
-	    si: 0xC6,   reg3_high: 0xC6,
-	    di: 0xC7,   reg1_high: 0xC7
-	},
-	reg0_low: {
-	    reg0: 0xC0, reg0_low: 0xC0,
-	    reg2: 0xC1, reg2_low: 0xC1,
-	    reg3: 0xC2, reg3_low: 0xC2,
-	    reg1: 0xC3, reg1_low: 0xC3,
-	    sp: 0xC4,   reg0_high: 0xC4,
-	    bp: 0xC5,   reg2_high: 0xC5,
-	    si: 0xC6,   reg3_high: 0xC6,
-	    di: 0xC7,   reg1_high: 0xC7
-	},
-	reg2: {
-	    reg0: 0xC8, reg0_low: 0xC8,
-	    reg2: 0xC9, reg2_low: 0xC9,
-	    reg3: 0xCA, reg3_low: 0xCA,
-	    reg1: 0xCB, reg1_low: 0xCB,
-	    sp: 0xCC,   reg0_high: 0xCC,
-	    bp: 0xCD,   reg2_high: 0xCD,
-	    si: 0xCE,   reg3_high: 0xCE,
-	    di: 0xCF,   reg1_high: 0xCF
-	},
-	reg2_low: {
-	    reg0: 0xC8, reg0_low: 0xC8,
-	    reg2: 0xC9, reg2_low: 0xC9,
-	    reg3: 0xCA, reg3_low: 0xCA,
-	    reg1: 0xCB, reg1_low: 0xCB,
-	    sp: 0xCC,   reg0_high: 0xCC,
-	    bp: 0xCD,   reg2_high: 0xCD,
-	    si: 0xCE,   reg3_high: 0xCE,
-	    di: 0xCF,   reg1_high: 0xCF
-	},
-	reg3: {
-	    reg0: 0xD0, reg0_low: 0xD0,
-	    reg2: 0xD1, reg2_low: 0xD1,
-	    reg3: 0xD2, reg3_low: 0xD2,
-	    reg1: 0xD3, reg1_low: 0xD3,
-	    sp: 0xD4,   reg0_high: 0xD4,
-	    bp: 0xD5,   reg2_high: 0xD5,
-	    si: 0xD6,   reg3_high: 0xD6,
-	    di: 0xD7,   reg1_high: 0xD7
-	},
-	reg3_low: {
-	    reg0: 0xD0, reg0_low: 0xD0,
-	    reg2: 0xD1, reg2_low: 0xD1,
-	    reg3: 0xD2, reg3_low: 0xD2,
-	    reg1: 0xD3, reg1_low: 0xD3,
-	    sp: 0xD4,   reg0_high: 0xD4,
-	    bp: 0xD5,   reg2_high: 0xD5,
-	    si: 0xD6,   reg3_high: 0xD6,
-	    di: 0xD7,   reg1_high: 0xD7
-	},
-	reg1: {
-	    reg0: 0xD8, reg0_low: 0xD8,
-	    reg2: 0xD9, reg2_low: 0xD9,
-	    reg3: 0xDA, reg3_low: 0xDA,
-	    reg1: 0xDB, reg1_low: 0xDB,
-	    sp: 0xDC,   reg0_high: 0xCC,
-	    bp: 0xDD,   reg2_high: 0xDD,
-	    si: 0xDE,   reg3_high: 0xDE,
-	    di: 0xDF,   reg1_high: 0xDF
-	},
-	reg1_low: {
-	    reg0: 0xD8, reg0_low: 0xD8,
-	    reg2: 0xD9, reg2_low: 0xD9,
-	    reg3: 0xDA, reg3_low: 0xDA,
-	    reg1: 0xDB, reg1_low: 0xDB,
-	    sp: 0xDC,   reg0_high: 0xCC,
-	    bp: 0xDD,   reg2_high: 0xDD,
-	    si: 0xDE,   reg3_high: 0xDE,
-	    di: 0xDF,   reg1_high: 0xDF
-	},
-	sp: {
-	    reg0: 0xE0, reg0_low: 0xE0,
-	    reg2: 0xE1, reg2_low: 0xE1,
-	    reg3: 0xE2, reg3_low: 0xE2,
-	    reg1: 0xE3, reg1_low: 0xE3,
-	    sp: 0xE4,   reg0_high: 0xE4,
-	    bp: 0xE5,   reg2_high: 0xE5,
-	    si: 0xE6,   reg3_high: 0xE6,
-	    di: 0xE7,   reg1_high: 0xE7
-	},
-	reg0_high: {
-	    reg0: 0xE0, reg0_low: 0xE0,
-	    reg2: 0xE1, reg2_low: 0xE1,
-	    reg3: 0xE2, reg3_low: 0xE2,
-	    reg1: 0xE3, reg1_low: 0xE3,
-	    sp: 0xE4,   reg0_high: 0xE4,
-	    bp: 0xE5,   reg2_high: 0xE5,
-	    si: 0xE6,   reg3_high: 0xE6,
-	    di: 0xE7,   reg1_high: 0xE7
-	},
-	bp: {
-	    reg0: 0xE8, reg0_low: 0xE8,
-	    reg2: 0xE9, reg2_low: 0xE9,
-	    reg3: 0xEA, reg3_low: 0xEA,
-	    reg1: 0xEB, reg1_low: 0xEB,
-	    sp: 0xEC,   reg0_high: 0xEC,
-	    bp: 0xED,   reg2_high: 0xED,
-	    si: 0xEE,   reg3_high: 0xEE,
-	    di: 0xEF,   reg1_high: 0xEF
-	},
-	reg2_high: {
-	    reg0: 0xE8, reg0_low: 0xE8,
-	    reg2: 0xE9, reg2_low: 0xE9,
-	    reg3: 0xEA, reg3_low: 0xEA,
-	    reg1: 0xEB, reg1_low: 0xEB,
-	    sp: 0xEC,   reg0_high: 0xEC,
-	    bp: 0xED,   reg2_high: 0xED,
-	    si: 0xEE,   reg3_high: 0xEE,
-	    di: 0xEF,   reg1_high: 0xEF
-	},
-	si: {
-	    reg0: 0xF0, reg0_low: 0xF0,
-	    reg2: 0xF1, reg2_low: 0xF1,
-	    reg3: 0xF2, reg3_low: 0xF2,
-	    reg1: 0xF3, reg1_low: 0xF3,
-	    sp: 0xF4,   reg0_high: 0xF4,
-	    bp: 0xF5,   reg2_high: 0xF5,
-	    si: 0xF6,   reg3_high: 0xF6,
-	    di: 0xF7,   reg1_high: 0xF7
-	},
-	reg3_high: {
-	    reg0: 0xF0, reg0_low: 0xF0,
-	    reg2: 0xF1, reg2_low: 0xF1,
-	    reg3: 0xF2, reg3_low: 0xF2,
-	    reg1: 0xF3, reg1_low: 0xF3,
-	    sp: 0xF4,   reg0_high: 0xF4,
-	    bp: 0xF5,   reg2_high: 0xF5,
-	    si: 0xF6,   reg3_high: 0xF6,
-	    di: 0xF7,   reg1_high: 0xF7
-	},
-	di: {
-	    reg0: 0xF8, reg0_low: 0xF8,
-	    reg2: 0xF9, reg2_low: 0xF9,
-	    reg3: 0xFA, reg3_low: 0xFA,
-	    reg1: 0xFB, reg1_low: 0xFB,
-	    sp: 0xFC,   reg0_high: 0xFC,
-	    bp: 0xFD,   reg2_high: 0xFD,
-	    si: 0xFE,   reg3_high: 0xFE,
-	    di: 0xFF,   reg1_high: 0xFF
-	},
-	reg1_high: {
-	    reg0: 0xF8, reg0_low: 0xF8,
-	    reg2: 0xF9, reg2_low: 0xF9,
-	    reg3: 0xFA, reg3_low: 0xFA,
-	    reg1: 0xFB, reg1_low: 0xFB,
-	    sp: 0xFC,   reg0_high: 0xFC,
-	    bp: 0xFD,   reg2_high: 0xFD,
-	    si: 0xFE,   reg3_high: 0xFE,
-	    di: 0xFF,   reg1_high: 0xFF
+    if (bytes === 2)
+	data_view.setUint16(0, number, true);
+    else
+	data_view.setUint32(0, number, true);
+
+    return new Uint8Array(buffer);
+}
+
+const segment_register_map = {
+    seg_extra: {
+	reg0: 0xC0,
+	reg2: 0xC1,
+	reg3: 0xC2,
+	reg1: 0xC3,
+	sp: 0xC4,
+	bp: 0xC5,
+	si: 0xC6,
+	di: 0xC7
+    },
+    seg_code: {
+	reg0: 0xC8,
+	reg2: 0xC9,
+	reg3: 0xCA,
+	reg1: 0xCB,
+	sp: 0xCC,
+	bp: 0xCD,
+	si: 0xCE,
+	di: 0xCF
+    },
+    seg_stack: {
+	reg0: 0xD0,
+	reg2: 0xD1,
+	reg3: 0xD2,
+	reg1: 0xD3,
+	sp: 0xD4,
+	bp: 0xD5,
+	si: 0xD6,
+	di: 0xD7
+    },
+    seg_data: {
+	reg0: 0xD8,
+	reg2: 0xD9,
+	reg3: 0xDA,
+	reg1: 0xDB,
+	sp: 0xDC,
+	bp: 0xDD,
+	si: 0xDE,
+	di: 0xDF
+    }
+};
+
+const register_register_map = {
+    reg0: {
+	reg0: 0xC0, reg0_low: 0xC0,
+	reg2: 0xC1, reg2_low: 0xC1,
+	reg3: 0xC2, reg3_low: 0xC2,
+	reg1: 0xC3, reg1_low: 0xC3,
+	sp: 0xC4,   reg0_high: 0xC4,
+	bp: 0xC5,   reg2_high: 0xC5,
+	si: 0xC6,   reg3_high: 0xC6,
+	di: 0xC7,   reg1_high: 0xC7
+    },
+    reg0_low: {
+	reg0: 0xC0, reg0_low: 0xC0,
+	reg2: 0xC1, reg2_low: 0xC1,
+	reg3: 0xC2, reg3_low: 0xC2,
+	reg1: 0xC3, reg1_low: 0xC3,
+	sp: 0xC4,   reg0_high: 0xC4,
+	bp: 0xC5,   reg2_high: 0xC5,
+	si: 0xC6,   reg3_high: 0xC6,
+	di: 0xC7,   reg1_high: 0xC7
+    },
+    reg2: {
+	reg0: 0xC8, reg0_low: 0xC8,
+	reg2: 0xC9, reg2_low: 0xC9,
+	reg3: 0xCA, reg3_low: 0xCA,
+	reg1: 0xCB, reg1_low: 0xCB,
+	sp: 0xCC,   reg0_high: 0xCC,
+	bp: 0xCD,   reg2_high: 0xCD,
+	si: 0xCE,   reg3_high: 0xCE,
+	di: 0xCF,   reg1_high: 0xCF
+    },
+    reg2_low: {
+	reg0: 0xC8, reg0_low: 0xC8,
+	reg2: 0xC9, reg2_low: 0xC9,
+	reg3: 0xCA, reg3_low: 0xCA,
+	reg1: 0xCB, reg1_low: 0xCB,
+	sp: 0xCC,   reg0_high: 0xCC,
+	bp: 0xCD,   reg2_high: 0xCD,
+	si: 0xCE,   reg3_high: 0xCE,
+	di: 0xCF,   reg1_high: 0xCF
+    },
+    reg3: {
+	reg0: 0xD0, reg0_low: 0xD0,
+	reg2: 0xD1, reg2_low: 0xD1,
+	reg3: 0xD2, reg3_low: 0xD2,
+	reg1: 0xD3, reg1_low: 0xD3,
+	sp: 0xD4,   reg0_high: 0xD4,
+	bp: 0xD5,   reg2_high: 0xD5,
+	si: 0xD6,   reg3_high: 0xD6,
+	di: 0xD7,   reg1_high: 0xD7
+    },
+    reg3_low: {
+	reg0: 0xD0, reg0_low: 0xD0,
+	reg2: 0xD1, reg2_low: 0xD1,
+	reg3: 0xD2, reg3_low: 0xD2,
+	reg1: 0xD3, reg1_low: 0xD3,
+	sp: 0xD4,   reg0_high: 0xD4,
+	bp: 0xD5,   reg2_high: 0xD5,
+	si: 0xD6,   reg3_high: 0xD6,
+	di: 0xD7,   reg1_high: 0xD7
+    },
+    reg1: {
+	reg0: 0xD8, reg0_low: 0xD8,
+	reg2: 0xD9, reg2_low: 0xD9,
+	reg3: 0xDA, reg3_low: 0xDA,
+	reg1: 0xDB, reg1_low: 0xDB,
+	sp: 0xDC,   reg0_high: 0xCC,
+	bp: 0xDD,   reg2_high: 0xDD,
+	si: 0xDE,   reg3_high: 0xDE,
+	di: 0xDF,   reg1_high: 0xDF
+    },
+    reg1_low: {
+	reg0: 0xD8, reg0_low: 0xD8,
+	reg2: 0xD9, reg2_low: 0xD9,
+	reg3: 0xDA, reg3_low: 0xDA,
+	reg1: 0xDB, reg1_low: 0xDB,
+	sp: 0xDC,   reg0_high: 0xCC,
+	bp: 0xDD,   reg2_high: 0xDD,
+	si: 0xDE,   reg3_high: 0xDE,
+	di: 0xDF,   reg1_high: 0xDF
+    },
+    sp: {
+	reg0: 0xE0, reg0_low: 0xE0,
+	reg2: 0xE1, reg2_low: 0xE1,
+	reg3: 0xE2, reg3_low: 0xE2,
+	reg1: 0xE3, reg1_low: 0xE3,
+	sp: 0xE4,   reg0_high: 0xE4,
+	bp: 0xE5,   reg2_high: 0xE5,
+	si: 0xE6,   reg3_high: 0xE6,
+	di: 0xE7,   reg1_high: 0xE7
+    },
+    reg0_high: {
+	reg0: 0xE0, reg0_low: 0xE0,
+	reg2: 0xE1, reg2_low: 0xE1,
+	reg3: 0xE2, reg3_low: 0xE2,
+	reg1: 0xE3, reg1_low: 0xE3,
+	sp: 0xE4,   reg0_high: 0xE4,
+	bp: 0xE5,   reg2_high: 0xE5,
+	si: 0xE6,   reg3_high: 0xE6,
+	di: 0xE7,   reg1_high: 0xE7
+    },
+    bp: {
+	reg0: 0xE8, reg0_low: 0xE8,
+	reg2: 0xE9, reg2_low: 0xE9,
+	reg3: 0xEA, reg3_low: 0xEA,
+	reg1: 0xEB, reg1_low: 0xEB,
+	sp: 0xEC,   reg0_high: 0xEC,
+	bp: 0xED,   reg2_high: 0xED,
+	si: 0xEE,   reg3_high: 0xEE,
+	di: 0xEF,   reg1_high: 0xEF
+    },
+    reg2_high: {
+	reg0: 0xE8, reg0_low: 0xE8,
+	reg2: 0xE9, reg2_low: 0xE9,
+	reg3: 0xEA, reg3_low: 0xEA,
+	reg1: 0xEB, reg1_low: 0xEB,
+	sp: 0xEC,   reg0_high: 0xEC,
+	bp: 0xED,   reg2_high: 0xED,
+	si: 0xEE,   reg3_high: 0xEE,
+	di: 0xEF,   reg1_high: 0xEF
+    },
+    si: {
+	reg0: 0xF0, reg0_low: 0xF0,
+	reg2: 0xF1, reg2_low: 0xF1,
+	reg3: 0xF2, reg3_low: 0xF2,
+	reg1: 0xF3, reg1_low: 0xF3,
+	sp: 0xF4,   reg0_high: 0xF4,
+	bp: 0xF5,   reg2_high: 0xF5,
+	si: 0xF6,   reg3_high: 0xF6,
+	di: 0xF7,   reg1_high: 0xF7
+    },
+    reg3_high: {
+	reg0: 0xF0, reg0_low: 0xF0,
+	reg2: 0xF1, reg2_low: 0xF1,
+	reg3: 0xF2, reg3_low: 0xF2,
+	reg1: 0xF3, reg1_low: 0xF3,
+	sp: 0xF4,   reg0_high: 0xF4,
+	bp: 0xF5,   reg2_high: 0xF5,
+	si: 0xF6,   reg3_high: 0xF6,
+	di: 0xF7,   reg1_high: 0xF7
+    },
+    di: {
+	reg0: 0xF8, reg0_low: 0xF8,
+	reg2: 0xF9, reg2_low: 0xF9,
+	reg3: 0xFA, reg3_low: 0xFA,
+	reg1: 0xFB, reg1_low: 0xFB,
+	sp: 0xFC,   reg0_high: 0xFC,
+	bp: 0xFD,   reg2_high: 0xFD,
+	si: 0xFE,   reg3_high: 0xFE,
+	di: 0xFF,   reg1_high: 0xFF
+    },
+    reg1_high: {
+	reg0: 0xF8, reg0_low: 0xF8,
+	reg2: 0xF9, reg2_low: 0xF9,
+	reg3: 0xFA, reg3_low: 0xFA,
+	reg1: 0xFB, reg1_low: 0xFB,
+	sp: 0xFC,   reg0_high: 0xFC,
+	bp: 0xFD,   reg2_high: 0xFD,
+	si: 0xFE,   reg3_high: 0xFE,
+	di: 0xFF,   reg1_high: 0xFF
+    }
+};
+
+const register_immediate_map = {reg0_low: 0xB0, reg2_low: 0xB1, reg3_low: 0xB2, reg1_low: 0xB3,
+				 reg0_high: 0xB4, reg2_high: 0xB5, reg3_high: 0xB6, reg1_high: 0xB7,
+				 reg0: 0xB8, reg2: 0xB9, reg3: 0xBA, reg1: 0xBB,
+				 sp: 0xBC, bp: 0xBD, si: 0xBE, di: 0xBF};
+
+class Assembler {
+    static bytecode = new Array();
+    static bytecode_ptr = this.bytecode.length;
+    static scan_ptr = 0;
+    static labels = new Map();
+    static data = new Map();
+
+    static write_byte(byte) {
+	if (typeof byte === "object") {
+	    for (const b of byte) {
+		this.bytecode[this.bytecode_ptr] = b;
+		this.bytecode_ptr += 1;
+	    }
+	    return;
 	}
-    };
-
-    static segment_register_map = {
-	seg_extra: {
-	    reg0: 0xC0,
-	    reg2: 0xC1,
-	    reg3: 0xC2,
-	    reg1: 0xC3,
-	    sp: 0xC4,
-	    bp: 0xC5,
-	    si: 0xC6,
-	    di: 0xC7
-	},
-	seg_code: {
-	    reg0: 0xC8,
-	    reg2: 0xC9,
-	    reg3: 0xCA,
-	    reg1: 0xCB,
-	    sp: 0xCC,
-	    bp: 0xCD,
-	    si: 0xCE,
-	    di: 0xCF
-	},
-	seg_stack: {
-	    reg0: 0xD0,
-	    reg2: 0xD1,
-	    reg3: 0xD2,
-	    reg1: 0xD3,
-	    sp: 0xD4,
-	    bp: 0xD5,
-	    si: 0xD6,
-	    di: 0xD7
-	},
-	seg_data: {
-	    reg0: 0xD8,
-	    reg2: 0xD9,
-	    reg3: 0xDA,
-	    reg1: 0xDB,
-	    sp: 0xDC,
-	    bp: 0xDD,
-	    si: 0xDE,
-	    di: 0xDF
-	}
-    };
-
-    static write_disk(hex) {
-	disk[disk_ptr++] = hex;
+	
+	this.bytecode[this.bytecode_ptr] = byte;
+	this.bytecode_ptr += 1;
     }
 
-    static to_little_endian(hex) {
-	const buffer = new ArrayBuffer(2);
-	const view = new DataView(buffer);
-	view.setUint16(0, hex, true);
-	return new Uint8Array(buffer);
+    static write_disk() {
+	for (const byte of this.bytecode) {
+	    disk[disk_ptr] = byte;
+	    disk_ptr += 1;
+	}
     }
 
-    static str(register, value) {
-	if (typeof value == "number") {
-	    if (Register.is_segment(register)) {
-		const error = "[ERROR] Cannot assign an immediate value to a segment register.";
-		bios_content = bios_content + error;
-		bios.value = bios_content;
-		return;
-	    }
-	    this.write_disk(this.register_immediate_map[register]);
-	    for (const hex of this.to_little_endian(value)) {
-		this.write_disk(hex);
-	    }
-	} else if (Register.is_register(value) && !Register.is_segment(register)) {
-	    this.write_disk(0x8B);
-	    this.write_disk(this.register_register_map[register][value]);
-	} else if (Register.is_register(value) && Register.is_segment(register)) {
-	    this.write_disk(0x8C);
-	    this.write_disk(this.segment_register_map[register][value]);
-	} else if (!Register.is_register(value)) {
-	    if (this.labels.has(value)) {
-		this.write_disk(this.register_immediate_map[register]);
-		for (const hex of this.to_little_endian(this.labels.get(value))) {
-		    this.write_disk(hex);
+    static add_data(mode, ident, value) {
+	if (mode === "scan") {
+	    this.data.set(ident, { value: undefined, ptr: this.scan_ptr });
+	    this.scan_ptr += value.length;
+	    return;
+	}
+	this._assert(
+	    this.data.get(ident).ptr === this.bytecode_ptr,
+	    this.data.get(ident).ptr.toString() + " does not match with " + ident + "'s pointer " + this.bytecode_ptr.toString 
+	);
+	this.data.set(ident, { value, ptr: this.bytecode_ptr });
+	for (const char of value) this.write_byte(char.charCodeAt());
+    }
+
+    static compile(insts) {
+	for (const inst of insts) {
+	    this.compile_inst("scan", inst[0], inst.slice(1, inst.length));
+	    console.log("[DEBUG] Scan Pointer: 0x0" + this.scan_ptr.toString(16) + " (" + this.scan_ptr.toString() + ")");
+	}
+	console.table("[DEBUG] Label Table:", this.labels);
+	console.table("[DEBUG] Data Table:", this.data);
+
+	for (const inst of insts) {
+	    this.compile_inst("compile", inst[0], inst.slice(1, inst.length));
+	}
+	this.write_disk();
+    }
+
+    static compile_inst(mode, op, op_args) {
+	this._assert(mode === "compile" || mode === "scan", String(mode) + " is not a valid mode");
+	if (op === "str") {
+	    const register = op_args[0];
+	    const value = op_args[1];
+	    this._assert(Register.is_register(register), String(register) + " is not a valid register");
+
+	    if (typeof value === "string" && Register.is_register(value)) {
+		if (Register.is_segment(register)) { // segment <- register
+		    this.compile_str_segment_register(mode, register, value);
+		    return;
 		}
+
+		this.compile_str_register_register(mode, register, value);
+		return;
+	    } else if (!isNaN(Number(value))) {
+		this._assert(!Register.is_segment(register), register + " cannot be assigned an immediate value");
+		this.compile_str_register_immediate(mode, register, value);
+	    } else if (this.data.has(value)) {
+		this.compile_str_register_data(mode, register, value);
 	    } else {
-	      // TODO: Implment labels yet to be defined
+		this._error("invalid value \"" + String(value) + "\" found during str instruction compilation");
 	    }
+	} else if (op === "int") {
+	    const code = op_args[0];
+	    this.compile_int(mode, code);
+	} else if (op === "hex") {
+	    const code = op_args[0];
+	    this.compile_hex(mode, code);
+	} else if (op === "pad") {
+	    const amt = op_args[0];
+	    this.compile_pad(mode, amt);
+	} else if (op === "label") {
+	    const name = op_args[0];
+	    this.compile_label(mode, name);
+	} else if (op === "data") {
+	    const name = op_args[0];
+	    const data = op_args[1];
+	    this.add_data(mode, name, data);
 	}
     }
 
-    static pad(hex, times) {
-	for (let i = 0; i < times; ++i) {
-	    this.write_disk(hex);
+    // inst: str <segment_register>, <general_purpose_register>
+    // e.g.: str seg_data, reg0
+    static compile_str_segment_register(mode, segment, register) {
+	if (mode === "scan") { this.scan_ptr += 2; return; }
+	this.write_byte(0x8C);
+	this.write_byte(segment_register_map[segment][register]);
+    }
+
+    // inst: str <general_purpose_register>, <general_purpose_register>
+    // e.g.: str reg0, reg1
+    static compile_str_register_register(mode, register1, register2) {
+	if (mode === "scan") { this.scan_ptr += 2; return; }
+	this.write_byte(0x8B);
+	this.write_byte(register_register_map[register1][register2]);
+    }
+
+    // inst: str <general_purpose_register>, <immediate_value>
+    // e.g.: str reg0, 27
+    static compile_str_register_immediate(mode, register, value) {
+	const little_endian_hex = Register.is_8_bit_register(register)
+	      ? [ little_endian(2, value)[0] ]
+	      : little_endian(2, value);
+	if (mode === "scan") { this.scan_ptr += 1 + little_endian_hex.length; return; }
+	this.write_byte(register_immediate_map[register]);
+	this.write_byte(little_endian_hex);
+    }
+
+    // inst: str <general_purpose_register>, <data>
+    // e.g.: str reg0, str (section data: str = "Hello, World!\n\0")
+    static compile_str_register_data(mode, register, value) {
+	const little_endian_hex = little_endian(2, this.data.get(value).ptr);
+	if (mode === "scan") { this.scan_ptr += 1 + little_endian_hex.length; return; }
+	this.write_byte(register_immediate_map[register]);
+	this.write_byte(little_endian_hex);
+    }
+
+    // inst: int <code>
+    // e.g.: int 0x10
+    static compile_int(mode, code) {
+	if (mode === "scan") { this.scan_ptr += 2; return; }
+	this.write_byte(0xCD);
+	this.write_byte(code);
+    }
+
+    // inst: hex <code>
+    // e.g.: hex 0xAA55
+    static compile_hex(mode, code) {
+	const little_endian_hex = little_endian(2, code);
+	if (mode === "scan") { this.scan_ptr += little_endian_hex.length; return; }
+	this.write_byte(little_endian_hex);
+    }
+
+    // inst: pad <amt> 
+    // e.g.: pad 510
+    static compile_pad(mode, amt) {
+	if (mode === "scan") { this.scan_ptr += amt - this.scan_ptr; return; }
+	const pad_amt = amt - this.bytecode_ptr;
+	for (let i = 0; i < pad_amt; ++i) {
+	    this.write_byte(0);
 	}
     }
 
-    static hex(hex) {
-	this.write_disk(hex);
+    // inst: label <name>
+    // e.g.: label _start
+    static compile_label(mode, name) {
+	if (mode === "scan") {
+	    this.labels.set(name, this.scan_ptr);
+	    return;
+	}
+	const error = "Pointer of label " +
+	      name + " - " + this.labels.get(name).toString() +
+	      " does not match " + this.bytecode_ptr.toString();
+	this._assert(this.labels.get(name) === this.bytecode_ptr, error);
     }
 
-    static int(code) {
-	this.write_disk(0xCD);
-	for (const hex of this.to_little_endian(code)) {
-	    this.write_disk(hex);
+    static _assert(expr, str) {
+	if (expr === true) return;
+	if (bios.hidden === false) {
+	    const error = "[ASSEMBLER] Assertion failed: " + str + ".";
+	    bios_content = bios_content + error;
+	    throw new Error(error);
+	} else {
+	    const error = "[ASSEMBLER] Assertion failed: " + str + ".";
+	    // assert to kernel
+	    throw new Error(error);
 	}
+	return;
+    }
+
+    static _error(str) {
+	if (bios.hidden === false) {
+	    const error = "[ASSEMBLER] Error: " + str + ".";
+	    bios_content = bios_content + error;
+	    throw new Error(error);
+	} else {
+	    const error = "[ASSEMBLER] Error: " + str + ".";
+	    // assert to kernel
+	    throw new Error(error);
+	}
+	return;
     }
 }
 
@@ -380,11 +537,17 @@ class BIOS {
 	while (Register.ip < code.length) {
 	    const inst = code[Register.ip];
 	    if (inst >= 0xB0 && inst <= 0xBF) { // str: store register, immediate value
-		const register = this.get_register(Emulator.register_immediate_map, code[Register.ip]);
-		const value_byte1 = code[++Register.ip];
-		const value_byte2 = code[++Register.ip];
-		const value = value_byte1 | (value_byte2 << 8);
-		Register.set(register, value);
+		const register = this.get_register(register_immediate_map, code[Register.ip]);
+
+		if (Register.is_8_bit_register(register)) {
+		    const value = code[++Register.ip];
+		    Register.set(register, value);
+		} else {
+		    const value_byte1 = code[++Register.ip];
+		    const value_byte2 = code[++Register.ip];
+		    const value = value_byte1 | (value_byte2 << 8);
+		    Register.set(register, value);
+		}
 	    } else if (inst == 0x8A) { // str: store register, register (8-bit)
 		const next_byte = code[++Register.ip];
 		let register = undefined;
@@ -411,7 +574,7 @@ class BIOS {
 		    return;
 		}
 
-		const value = this.get_register(Emulator.register_register_map[register], next_byte);
+		const value = this.get_register(register_register_map[register], next_byte);
 		Register.set(register, value);
 	    } else if (inst == 0x8B) { // str: store register, register (16-bit)
 		const next_byte = code[++Register.ip];
@@ -439,7 +602,7 @@ class BIOS {
 		    return;
 		}
 
-		const value = this.get_register(Emulator.register_register_map[register], next_byte);
+		const value = this.get_register(register_register_map[register], next_byte);
 		Register.set(register, value);
 	    } else if (inst == 0x8C) { // str: store segment, register (16-bit)
 		const next_byte = code[++Register.ip];
@@ -460,7 +623,7 @@ class BIOS {
 		    return;
 		}
 
-		const register = this.get_register(Emulator.segment_register_map[segment], next_byte);
+		const register = this.get_register(segment_register_map[segment], next_byte);
 		Register.set(segment, register);
 	    } else if (inst == 0xCD) { // int: BIOS interrupts
 		const interrupt_code = code[++Register.ip];
@@ -492,17 +655,21 @@ class BIOS {
     }
 }
 
-// section code
-Emulator.str("reg0", 1);
-Emulator.str("seg_data", "reg0");
-Emulator.str("seg_extra", "reg0");
-Emulator.str("reg0_high", 0x0E);
-Emulator.str("reg0_low", 'U'.charCodeAt());
-Emulator.int(0x10);
+const insts = [
+    ["data", "string", "Hello World!\n\0"],
+    ["label", "_start"],
+    ["str", "reg0", 0],
+    ["str", "seg_data", "reg0"],
+    ["str", "seg_extra", "reg0"],
+    ["str", "reg0_high", 0x0E],
+    ["str", "reg0_low", 'U'.charCodeAt()],
+    ["int", 0x10],
+    ["str", "si", "string"],
+    ["pad", 510],
+    ["hex", 0xAA55]
+];
 
-Emulator.pad(0, 510 - (disk_ptr - org_adr));
-Emulator.hex(0x55);
-Emulator.hex(0xAA);
+Assembler.compile(insts);
 BIOS.load_master_boot_record();
 
 console.log("[DEBUG] Memory View:", memory);
