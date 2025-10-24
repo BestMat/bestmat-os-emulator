@@ -24,8 +24,6 @@ class Register {
 			sp: 0, bp: 0, si: 0, di: 0, if_flag: 1, ip: 0,
 			seg_code: 0, seg_data: 0, seg_extra: 0, seg_stack: 0};
 
-    static ip = this.registers.ip;
-
     static get(register) {
 	let value = this.registers[register];
 	if (register.includes("_") && !register.includes("flag") && !register.includes("seg")) {
@@ -400,6 +398,14 @@ class Assembler {
 	    const name = op_args[0];
 	    const data = op_args[1];
 	    this.add_data(mode, name, data);
+	} else if (op === "inc") {
+	    const register = op_args[0];
+	    this._assert(Register.is_register(register), String(register) + " is not a valid register.");
+	    this._assert(!Register.is_segment(register), "cannot increment a segment register.");
+	    this._assert(!Register.is_8_bit_register(register), "cannot increment an 8-bit register.");
+	    this.compile_inc(mode, register);
+	} else {
+	    this._error("invalid instruction \"" + String(op) + "\" found during compilation");
 	}
     }
 
@@ -478,6 +484,20 @@ class Assembler {
 	this._assert(this.labels.get(name) === this.bytecode_ptr, error);
     }
 
+    // inst: inc <register>
+    // e.g.: inc reg0
+    static compile_inc(mode, register) {
+	if (mode === "scan") { this.scan_ptr += 1; return; }
+	if (register === "reg0")      this.write_byte(0x40);
+	else if (register === "reg2") this.write_byte(0x41);
+	else if (register === "reg3") this.write_byte(0x42);
+	else if (register === "reg1") this.write_byte(0x43);
+	else if (register === "sp")   this.write_byte(0x44);
+	else if (register === "bp")   this.write_byte(0x45);
+	else if (register === "si")   this.write_byte(0x46);
+	else if (register === "di")   this.write_byte(0x47);
+    }
+
     static _assert(expr, str) {
 	if (expr === true) return;
 	if (bios.hidden === false) {
@@ -534,22 +554,22 @@ class BIOS {
     }
     
     static emulate_bootloader(code) {
-	while (Register.ip < code.length) {
-	    const inst = code[Register.ip];
+	while (Register.registers.ip < code.length) {
+	    const inst = code[Register.registers.ip];
 	    if (inst >= 0xB0 && inst <= 0xBF) { // str: store register, immediate value
-		const register = this.get_register(register_immediate_map, code[Register.ip]);
+		const register = this.get_register(register_immediate_map, inst);
 
 		if (Register.is_8_bit_register(register)) {
-		    const value = code[++Register.ip];
+		    const value = code[++Register.registers.ip];
 		    Register.set(register, value);
 		} else {
-		    const value_byte1 = code[++Register.ip];
-		    const value_byte2 = code[++Register.ip];
+		    const value_byte1 = code[++Register.registers.ip];
+		    const value_byte2 = code[++Register.registers.ip];
 		    const value = value_byte1 | (value_byte2 << 8);
 		    Register.set(register, value);
 		}
 	    } else if (inst == 0x8A) { // str: store register, register (8-bit)
-		const next_byte = code[++Register.ip];
+		const next_byte = code[++Register.registers.ip];
 		let register = undefined;
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
 		    register = "reg0_low";
@@ -577,7 +597,7 @@ class BIOS {
 		const value = this.get_register(register_register_map[register], next_byte);
 		Register.set(register, value);
 	    } else if (inst == 0x8B) { // str: store register, register (16-bit)
-		const next_byte = code[++Register.ip];
+		const next_byte = code[++Register.registers.ip];
 		let register = undefined;
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
 		    register = "reg0";
@@ -605,7 +625,7 @@ class BIOS {
 		const value = this.get_register(register_register_map[register], next_byte);
 		Register.set(register, value);
 	    } else if (inst == 0x8C) { // str: store segment, register (16-bit)
-		const next_byte = code[++Register.ip];
+		const next_byte = code[++Register.registers.ip];
 		let segment = undefined;
 
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
@@ -626,11 +646,21 @@ class BIOS {
 		const register = this.get_register(segment_register_map[segment], next_byte);
 		Register.set(segment, register);
 	    } else if (inst == 0xCD) { // int: BIOS interrupts
-		const interrupt_code = code[++Register.ip];
+		const interrupt_code = code[++Register.registers.ip];
 		this.interrupt(interrupt_code);
+	    } else if (inst >= 0x40 && inst <= 0x47) { // inc: increments 16-bit register
+		const increment_register = register => Register.set(register, Register.get(register) + 1);
+		if (inst === 0x40)      increment_register("reg0");
+		else if (inst === 0x41) increment_register("reg2");
+		else if (inst === 0x42) increment_register("reg3");
+		else if (inst === 0x43) increment_register("reg1");
+		else if (inst === 0x44) increment_register("sp");
+		else if (inst === 0x45) increment_register("bp");
+		else if (inst === 0x46) increment_register("si");
+		else if (inst === 0x47) increment_register("di");
 	    }
 
-	    Register.ip += 1;
+	    Register.registers.ip += 1;
 	}
     }
     
@@ -646,6 +676,7 @@ class BIOS {
 	if (boot_signature[0] == 0x55 && boot_signature[1] == 0xAA) {
 	    const bootloader_code = disk.slice(org_adr + 0, org_adr + 440); 
 	    this.emulate_bootloader(bootloader_code);
+	    console.table("[DEBUG] Register Table", Register.registers);
 	} else {
 	    bios_content = bios_content + "[ERROR] Cannot find bootloader.\n";
 	    bios_content = bios_content + "[ERROR] Make sure boot signature is 0xAA55.\n";
@@ -665,6 +696,7 @@ const insts = [
     ["str", "reg0_low", 'U'.charCodeAt()],
     ["int", 0x10],
     ["str", "si", "string"],
+    ["inc", "si"],
     ["pad", 510],
     ["hex", 0xAA55]
 ];
