@@ -21,7 +21,8 @@ bios_content = bios_content + "BestMat OS Emulator: BIOS\n";
 bios.value = bios_content;
 class Register {
     static registers = {reg0: 0, reg1: 0, reg2: 0, reg3: 0, reg4: 0,
-			sp: 0, bp: 0, si: 0, di: 0, if_flag: 1, ip: 0,
+			sp: 0, bp: 0, si: 0, di: 0, ip: 0,
+			ip_flag: 1, zero_flag: 0,
 			seg_code: 0, seg_data: 0, seg_extra: 0, seg_stack: 0};
 
     static get(register) {
@@ -78,6 +79,10 @@ class Register {
     
     static is_segment(register) {
 	return register.split("_")[0] == "seg";
+    }
+
+    static is_flag(register) {
+	return register.split("_")[1] == "flag";
     }
 }
 
@@ -348,7 +353,6 @@ class Assembler {
     static compile(insts) {
 	for (const inst of insts) {
 	    this.compile_inst("scan", inst[0], inst.slice(1, inst.length));
-	    console.log("[DEBUG] Scan Pointer: 0x0" + this.scan_ptr.toString(16) + " (" + this.scan_ptr.toString() + ")");
 	}
 	console.table("[DEBUG] Label Table:", this.labels);
 	console.table("[DEBUG] Data Table:", this.data);
@@ -379,6 +383,11 @@ class Assembler {
 		this.compile_str_register_immediate(mode, register, value);
 	    } else if (this.data.has(value)) {
 		this.compile_str_register_data(mode, register, value);
+	    } else if (typeof value === "string" && value[0] === '*') {
+		const val_reg = value.slice(1);
+		this._assert(val_reg === "si" || val_reg === "di",
+			     val_reg + " is not a valid register for dereferencing");
+		this.compile_str_register_dereference(mode, register, val_reg);
 	    } else {
 		this._error("invalid value \"" + String(value) + "\" found during str instruction compilation");
 	    }
@@ -402,8 +411,39 @@ class Assembler {
 	    const register = op_args[0];
 	    this._assert(Register.is_register(register), String(register) + " is not a valid register.");
 	    this._assert(!Register.is_segment(register), "cannot increment a segment register.");
-	    this._assert(!Register.is_8_bit_register(register), "cannot increment an 8-bit register.");
 	    this.compile_inc(mode, register);
+	} else if (op === "jmp") {
+	    const address = op_args[0];
+
+	   if (address.includes(':')) {
+		const address_split = address.split(':');
+		const segment = address_split[0];
+		const offset = address_split[1];
+		this.compile_jmp_far(mode, segment, offset);
+	    } else if (Register.is_register(address)) {
+		this.compile_jmp_indirect(mode, address);
+	    } else if (this.labels.has(address)) {
+		this.compile_jmp_label(mode, address);
+	    } else {
+		this._error("invalid jump address \"" + String(address) + "\" found during compilation");
+	    }
+	} else if (op === "cmp") {
+	    const register = op_args[0];
+	    const value = op_args[1];
+	    this._assert(Register.is_register(register), String(register) + " is not a valid register");
+
+	    if (!isNaN(Number(value))) {
+		this.compile_cmp_register_immediate(mode, register, Number(value));
+	    } else if (Register.is_register(String(value))) {
+		this.compile_cmp_register_register(mode, register, value);
+	    } else {
+		console.log(value);
+		console.log(typeof value);
+		this._error("invalid cmp value \"" + String(value) + "\" found during compilation");
+	    }
+	} else if (op === "je") {
+	    const label = op_args[0];
+	    this.compile_je(mode, label);
 	} else {
 	    this._error("invalid instruction \"" + String(op) + "\" found during compilation");
 	}
@@ -421,6 +461,11 @@ class Assembler {
     // e.g.: str reg0, reg1
     static compile_str_register_register(mode, register1, register2) {
 	if (mode === "scan") { this.scan_ptr += 2; return; }
+	if (Register.is_8_bit_register(register1)) {
+	    this.write_byte(0x8A);
+	    this.write_byte(register_register_map[register1][register2]);
+	    return;
+	}
 	this.write_byte(0x8B);
 	this.write_byte(register_register_map[register1][register2]);
     }
@@ -443,6 +488,36 @@ class Assembler {
 	if (mode === "scan") { this.scan_ptr += 1 + little_endian_hex.length; return; }
 	this.write_byte(register_immediate_map[register]);
 	this.write_byte(little_endian_hex);
+    }
+
+    // inst: str <register>, *<si/di>
+    // e.g.: str reg0, *si
+    static compile_str_register_dereference(mode, register, index) {
+	if (mode === "scan") { this.scan_ptr += 2; return; }
+	if (index === "si") {
+	    if (Register.is_8_bit_register(register)) {
+		this.write_byte(0x8A);
+		if (register === "reg0_low")       this.write_byte(0x04);
+		else if (register === "reg2_low")  this.write_byte(0x0C);
+		else if (register === "reg3_low")  this.write_byte(0x14);
+		else if (register === "reg1_low")  this.write_byte(0x1C);
+		else if (register === "reg0_high") this.write_byte(0x24);
+		else if (register === "reg2_high") this.write_byte(0x2C);
+		else if (register === "reg3_high") this.write_byte(0x34);
+		else if (register === "reg1_high") this.write_byte(0x3C);
+		return;
+	    }
+
+	    this.write_byte(0x8B);
+	    if (register === "reg0")      this.write_byte(0x04);
+	    else if (register === "reg2") this.write_byte(0x0C);
+	    else if (register === "reg3") this.write_byte(0x14);
+	    else if (register === "reg1") this.write_byte(0x1C);
+	    else if (register === "sp")   this.write_byte(0x24);
+	    else if (register === "bp")   this.write_byte(0x2C);
+	} else {
+	    // TODO: Add implementation for di register.
+	}
     }
 
     // inst: int <code>
@@ -488,14 +563,129 @@ class Assembler {
     // e.g.: inc reg0
     static compile_inc(mode, register) {
 	if (mode === "scan") { this.scan_ptr += 1; return; }
-	if (register === "reg0")      this.write_byte(0x40);
-	else if (register === "reg2") this.write_byte(0x41);
-	else if (register === "reg3") this.write_byte(0x42);
-	else if (register === "reg1") this.write_byte(0x43);
-	else if (register === "sp")   this.write_byte(0x44);
-	else if (register === "bp")   this.write_byte(0x45);
-	else if (register === "si")   this.write_byte(0x46);
-	else if (register === "di")   this.write_byte(0x47);
+	if (register === "reg0")            this.write_byte(0x40);
+	else if (register === "reg2")       this.write_byte(0x41);
+	else if (register === "reg3")       this.write_byte(0x42);
+	else if (register === "reg1")       this.write_byte(0x43);
+	else if (register === "sp")         this.write_byte(0x44);
+	else if (register === "bp")         this.write_byte(0x45);
+	else if (register === "si")         this.write_byte(0x46);
+	else if (register === "di")         this.write_byte(0x47);
+	else if (register === "reg0_low")   this.write_byte(0xC0);
+	else if (register === "reg2_low")   this.write_byte(0xC1);
+	else if (register === "reg3_low")   this.write_byte(0xC2);
+	else if (register === "reg1_low")   this.write_byte(0xC3);
+	else if (register === "reg0_high")  this.write_byte(0xC4);
+	else if (register === "reg2_high")  this.write_byte(0xC5);
+	else if (register === "reg3_high")  this.write_byte(0xC6);
+	else if (register === "reg1_high")  this.write_byte(0xC7);
+    }
+
+    // inst: jmp <segment:offset>
+    // e.g.: jmp 0x7C00:0x0000
+    static compile_jmp_far(mode, segment, offset) {
+	const segment_little_endian = little_endian(2, segment);
+	const offset_little_endian = little_endian(2, offset);
+	if (mode === "scan") {
+	    this.scan_ptr += segment_little_endian.length + offset_little_endian.length + 1;
+	    return;
+	}
+	write_byte(0xEA);
+	write_byte(offset_little_endian);
+	write_byte(segment_little_endian);
+    }
+
+    // inst: jmp <register>
+    // e.g.: jmp reg0
+    static compile_jmp_indirect(mode, register) {
+	if (mode === "scan") { this.scan_ptr += 2; return; }
+	write_byte(0xFF);
+	if (register === "reg0")      write_byte(0xE0); 
+	else if (register === "reg2") write_byte(0xE1); 
+	else if (register === "reg3") write_byte(0xE2); 
+	else if (register === "reg1") write_byte(0xE3); 
+	else if (register === "sp")   write_byte(0xE4); 
+	else if (register === "bp")   write_byte(0xE5); 
+	else if (register === "si")   write_byte(0xE6); 
+	else if (register === "di")   write_byte(0xE7); 
+    }
+
+    // inst: jmp <label>
+    // e.g.: jmp _start
+    static compile_jmp_label(mode, label) {
+	if (mode === "scan") {
+	    const current_address = this.scan_ptr;
+	    const desired_address = this.labels.get(label);
+	    const displacement    = little_endian(2, desired_address - (current_address + 3) + 1);
+	    this.scan_ptr += displacement.length + 1;
+	    return;
+	}
+	const current_address = this.bytecode_ptr + 1;
+	const desired_address = this.labels.get(label);
+	const displacement    = little_endian(2, desired_address - (current_address + 3) + 1);
+	this.write_byte(0xE9);
+	this.write_byte(displacement);
+    }
+
+    // inst: cmp <register>, <immediate value>
+    // e.g.: cmp reg0, 0
+    static compile_cmp_register_immediate(mode, register, immediate) {
+	if (Register.is_8_bit_register(register)) {
+	    if (mode === "scan") { this.scan_ptr += 3; return; }
+	    const immediate_little_endian = little_endian(2, immediate)[0];
+	    this.write_byte(0x80);
+
+	    if (register === "reg0_low")       this.write_byte(0xF8);
+	    else if (register === "reg2_low")  this.write_byte(0xF9);
+	    else if (register === "reg3_low")  this.write_byte(0xFA);
+	    else if (register === "reg1_low")  this.write_byte(0xFB);
+	    else if (register === "reg0_high") this.write_byte(0xFC);
+	    else if (register === "reg2_high") this.write_byte(0xFD);
+	    else if (register === "reg3_high") this.write_byte(0xFE);
+	    else if (register === "reg1_high") this.write_byte(0xFF);
+
+	    this.write_byte(immediate_little_endian);
+	    return;
+	}
+
+	if (mode === "scan") { this.scan_ptr += 4; return; }
+	const immediate_little_endian = little_endian(2, immediate);
+	this.write_byte(0x81);
+
+	if (register === "reg0")       this.write_byte(0xF8);
+	else if (register === "reg2")  this.write_byte(0xF9);
+	else if (register === "reg3")  this.write_byte(0xFA);
+	else if (register === "reg1")  this.write_byte(0xFB);
+	else if (register === "sp")    this.write_byte(0xFC);
+	else if (register === "bp")    this.write_byte(0xFD);
+	else if (register === "si")    this.write_byte(0xFE);
+	else if (register === "di")    this.write_byte(0xFF);
+
+	this.write_byte(immediate_little_endian);
+    }
+
+    // inst: cmp <register1>, <register2>
+    // e.g.: cmp reg0, reg1 
+    static compile_cmp_register_register(mode, register1, register2) {
+	if (mode === "scan") { this.scan_ptr += 2; return; }
+	if (Register.is_8_bit_register(register1)) {
+	    this.write_byte(0x38);
+	    this.write_byte(register_register_map[register1][register2]);
+	}
+
+	this.write_byte(0x39);
+	this.write_byte(register_register_map[register1][register2]);
+    }
+
+    // inst: je <label>
+    // e.g.: je _start
+    static compile_je(mode, label) {
+	if (mode === "scan") { this.scan_ptr += 2; return; }
+	this._assert(this.labels.has(label), "invalid label \"" + label + "\" found during compilation");
+	const label_adr = this.labels.get(label);
+	const displacement = (label_adr - (this.bytecode_ptr + 2) + 1);
+	this.write_byte(0x74);
+	this.write_byte(displacement);
     }
 
     static _assert(expr, str) {
@@ -550,6 +740,10 @@ class BIOS {
 		bios_content = bios_content + String.fromCharCode(low);
 		bios.value = bios_content;
 	    }
+	} else if (code === 0) {
+	    console.log("[DEBUG] Exit function reached");
+	    bios_content = bios_content + "\n[DEBUG] Exit function reached\n";
+	    bios.value = bios_content;
 	}
     }
     
@@ -565,12 +759,14 @@ class BIOS {
 		} else {
 		    const value_byte1 = code[++Register.registers.ip];
 		    const value_byte2 = code[++Register.registers.ip];
-		    const value = value_byte1 | (value_byte2 << 8);
+		    let value = value_byte1 | (value_byte2 << 8);
+		    if (value & 0x8000) value -= 0x10000;
 		    Register.set(register, value);
 		}
 	    } else if (inst == 0x8A) { // str: store register, register (8-bit)
 		const next_byte = code[++Register.registers.ip];
 		let register = undefined;
+
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
 		    register = "reg0_low";
 		} else if (next_byte >= 0xC8 && next_byte <= 0xCF) {
@@ -587,18 +783,26 @@ class BIOS {
 		    register = "reg3_high";
 		} else if (next_byte >= 0xF8 && next_byte <= 0xFF) {
 		    register = "reg1_high";
-		} else {
-		    const error = "[ERROR] Invalid byte " + String(next_byte) + " found in source.\n";
-		    bios_content = bios_content + error;
-		    bios.value = bios_content;
-		    return;
 		}
 
-		const value = this.get_register(register_register_map[register], next_byte);
-		Register.set(register, value);
+		if (register != undefined) {
+		    const value = this.get_register(register_register_map[register], next_byte);
+		    Register.set(register, Register.get(value));
+		}
+
+		const dereference = register => Register.set(register, code[Register.get("si")]); 
+		if (next_byte === 0x04)      { dereference("reg0_low"); }
+		else if (next_byte === 0x0C) { dereference("reg2_low"); }
+		else if (next_byte === 0x14) { dereference("reg3_low"); }
+		else if (next_byte === 0x1C) { dereference("reg1_low"); }
+		else if (next_byte === 0x24) { dereference("reg0_high"); }
+		else if (next_byte === 0x2C) { dereference("reg2_high"); }
+		else if (next_byte === 0x34) { dereference("reg3_high"); }
+		else if (next_byte === 0x3C) { dereference("reg1_high"); }
 	    } else if (inst == 0x8B) { // str: store register, register (16-bit)
 		const next_byte = code[++Register.registers.ip];
 		let register = undefined;
+	
 		if (next_byte >= 0xC0 && next_byte <= 0xC7) {
 		    register = "reg0";
 		} else if (next_byte >= 0xC8 && next_byte <= 0xCF) {
@@ -615,15 +819,20 @@ class BIOS {
 		    register = "si";
 		} else if (next_byte >= 0xF8 && next_byte <= 0xFF) {
 		    register = "di";
-		} else {
-		    const error = "[ERROR] Invalid byte " + String(next_byte) + " found in source.\n";
-		    bios_content = bios_content + error;
-		    bios.value = bios_content;
-		    return;
 		}
 
-		const value = this.get_register(register_register_map[register], next_byte);
-		Register.set(register, value);
+		if (register != undefined) {
+		    const value = this.get_register(register_register_map[register], next_byte);
+		    Register.set(register, Register.get(value));
+		}
+
+		const dereference = register => Register.set(register, code[Register.get("si")]); 
+		if (next_byte === 0x04)      { dereference("reg0"); }
+		else if (next_byte === 0x0C) { dereference("reg2"); }
+		else if (next_byte === 0x14) { dereference("reg3"); }
+		else if (next_byte === 0x1C) { dereference("reg1"); }
+		else if (next_byte === 0x24) { dereference("sp"); }
+		else if (next_byte === 0x2C) { dereference("bp"); }
 	    } else if (inst == 0x8C) { // str: store segment, register (16-bit)
 		const next_byte = code[++Register.registers.ip];
 		let segment = undefined;
@@ -636,11 +845,6 @@ class BIOS {
 		    segment = "seg_stack";
 		} else if (next_byte >= 0xD8 && next_byte <= 0xDF) {
 		    segment = "seg_data";
-		} else {
-		    const error = "[ERROR] Invalid byte " + String(next_byte) + " found in source.\n";
-		    bios_content = bios_content + error;
-		    bios.value = bios_content;
-		    return;
 		}
 
 		const register = this.get_register(segment_register_map[segment], next_byte);
@@ -648,7 +852,7 @@ class BIOS {
 	    } else if (inst == 0xCD) { // int: BIOS interrupts
 		const interrupt_code = code[++Register.registers.ip];
 		this.interrupt(interrupt_code);
-	    } else if (inst >= 0x40 && inst <= 0x47) { // inc: increments 16-bit register
+	    } else if (inst >= 0x40 && inst <= 0x47 || inst >= 0xC0 && inst <= 0xC7) { // inc: increments register
 		const increment_register = register => Register.set(register, Register.get(register) + 1);
 		if (inst === 0x40)      increment_register("reg0");
 		else if (inst === 0x41) increment_register("reg2");
@@ -658,6 +862,48 @@ class BIOS {
 		else if (inst === 0x45) increment_register("bp");
 		else if (inst === 0x46) increment_register("si");
 		else if (inst === 0x47) increment_register("di");
+		else if (inst === 0xC0) increment_register("reg0_low");
+		else if (inst === 0xC1) increment_register("reg2_low");
+		else if (inst === 0xC2) increment_register("reg3_low");
+		else if (inst === 0xC3) increment_register("reg1_low");
+		else if (inst === 0xC4) increment_register("reg0_high");
+		else if (inst === 0xC5) increment_register("reg2_high");
+		else if (inst === 0xC6) increment_register("reg3_high");
+		else if (inst === 0xC7) increment_register("reg1_high");
+	    } else if (inst === 0xE9) { // jmp: jump to label
+		const byte1 = code[++Register.registers.ip];
+		const byte2 = code[++Register.registers.ip];
+		let address = byte1 | (byte2 << 8);
+		if (address & 0x8000) address -= 0x10000;
+		Register.registers.ip += address;
+	    } else if (inst === 0x80) { // cmp: register (8-bit) immediate
+		const register_hex = code[++Register.registers.ip];
+		let register = undefined;
+
+		if (register_hex === 0xF8)      register = "reg0_low"; 
+		else if (register_hex === 0xF9) register = "reg2_low"; 
+		else if (register_hex === 0xFA) register = "reg3_low"; 
+		else if (register_hex === 0xFB) register = "reg1_low"; 
+		else if (register_hex === 0xFC) register = "reg0_high"; 
+		else if (register_hex === 0xFD) register = "reg2_high"; 
+		else if (register_hex === 0xFE) register = "reg3_high"; 
+		else if (register_hex === 0xFF) register = "reg1_high"; 
+
+		const register_value  = Register.get(register);
+		const immediate_value = code[++Register.registers.ip];
+		
+		// TODO: Implement other x86 Flags for comparsion.
+		if ((register_value - immediate_value) === 0) {
+		    Register.set("zero_flag", 1);
+		} else {
+		    Register.set("zero_flag", 0);
+		}
+	    } else if (inst === 0x74) { // je: jump if zero flag is true
+		const adr = code[++Register.registers.ip];
+		if (Register.registers.zero_flag === 1) {
+		    Register.registers.ip = Register.registers.ip + adr - 1;
+		    Register.registers.zero_flag = 0;
+		}
 	    }
 
 	    Register.registers.ip += 1;
@@ -688,6 +934,7 @@ class BIOS {
 
 const insts = [
     ["data", "string", "Hello World!\n\0"],
+    
     ["label", "_start"],
     ["str", "reg0", 0],
     ["str", "seg_data", "reg0"],
@@ -695,8 +942,34 @@ const insts = [
     ["str", "reg0_high", 0x0E],
     ["str", "reg0_low", 'U'.charCodeAt()],
     ["int", 0x10],
+    ["str", "reg0_low", '\n'.charCodeAt()],
+    ["int", 0x10],
+
+    ["str", "reg1_low", '0'.charCodeAt()],
+
+    ["label", "loop"],
+    ["cmp", "reg1_low", '9'.charCodeAt()],
+    ["je", "exit"],
+    ["str", "reg0_low", "reg1_low"],
+    ["inc", "reg1_low"],
+    ["int", 0x10],
+    ["str", "reg0_low", '\n'.charCodeAt()],
+    ["int", 0x10],
+    ["jmp", "loop"],
+
+    ["label", "exit"],
     ["str", "si", "string"],
+
+    ["label", "puts"],
+    ["cmp", "reg0_low", '\0'.charCodeAt()],
+    ["je", "puts_exit"],
+    ["str", "reg0_low", "*si"],
+    ["int", 0x10],
     ["inc", "si"],
+    ["jmp", "puts"],
+
+    ["label", "puts_exit"],
+
     ["pad", 510],
     ["hex", 0xAA55]
 ];
